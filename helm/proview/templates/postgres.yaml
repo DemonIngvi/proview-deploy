@@ -1,0 +1,44 @@
+{{- if .Values.postgres.enabled }}
+{{- $p := .Values.postgres }}
+# PostgreSQL for the banner pool, managed by CloudNativePG: synchronous
+# streaming replicas, automatic failover, the "<name>-app" Secret with a
+# ready-to-use connection URI (consumed by banner-service as POSTGRES_DSN).
+# The hot path never queries it: banner-service serves from memory.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $p.name }}
+  labels: {{- include "proview.labels" . | nindent 4 }}
+spec:
+  instances: {{ $p.instances }}
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  primaryUpdateStrategy: unsupervised
+  minSyncReplicas: 1
+  maxSyncReplicas: 1
+  bootstrap:
+    initdb:
+      database: proview
+      owner: proview
+  storage:
+    size: {{ $p.storage }}
+    {{- with $p.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  resources: {{- toYaml $p.resources | nindent 4 }}
+  affinity:
+    topologyKey: topology.kubernetes.io/zone
+  monitoring:
+    enablePodMonitor: false
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $p.name }}-replicas
+  labels: {{- include "proview.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      cnpg.io/cluster: {{ $p.name }}
+      cnpg.io/instanceRole: replica
+{{- end }}

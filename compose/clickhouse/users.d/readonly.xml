@@ -1,0 +1,21 @@
+<!-- Read-only user for proview-analytics: SELECT on the aggregator database only. -->
+<clickhouse>
+    <profiles>
+        <analytics_ro>
+            <readonly>2</readonly>
+            <max_execution_time>15</max_execution_time>
+            <max_memory_usage>4000000000</max_memory_usage>
+        </analytics_ro>
+    </profiles>
+    <users>
+        <proview_ro>
+            <password from_env="CLICKHOUSE_RO_PASSWORD"/>
+            <profile>analytics_ro</profile>
+            <quota>default</quota>
+            <networks><ip>::/0</ip></networks>
+            <grants>
+                <query>GRANT SELECT ON proview_agg.*</query>
+            </grants>
+        </proview_ro>
+    </users>
+</clickhouse>

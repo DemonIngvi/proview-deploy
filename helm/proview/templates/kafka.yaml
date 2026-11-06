@@ -1,0 +1,102 @@
+{{- if .Values.kafka.enabled }}
+{{- $k := .Values.kafka }}
+# Kafka in KRaft mode managed by Strimzi: 3 combined controller/broker nodes,
+# RF=3 with min.insync.replicas=2 tolerates the loss of one node without
+# losing acknowledged writes (producers use acks=all + idempotence).
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: {{ $k.name }}-pool
+  labels:
+    strimzi.io/cluster: {{ $k.name }}
+    {{- include "proview.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $k.replicas }}
+  roles: [controller, broker]
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: {{ $k.storage }}
+        deleteClaim: false
+        kraftMetadata: shared
+        {{- with $k.storageClass }}
+        class: {{ . }}
+        {{- end }}
+  resources: {{- toYaml $k.resources | nindent 4 }}
+  template:
+    pod:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              strimzi.io/pool-name: {{ $k.name }}-pool
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: {{ $k.name }}
+  labels: {{- include "proview.labels" . | nindent 4 }}
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: {{ $k.version }}
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    config:
+      default.replication.factor: {{ $k.replicationFactor }}
+      min.insync.replicas: {{ $k.minInsyncReplicas }}
+      offsets.topic.replication.factor: {{ $k.replicationFactor }}
+      transaction.state.log.replication.factor: {{ $k.replicationFactor }}
+      transaction.state.log.min.isr: {{ $k.minInsyncReplicas }}
+      auto.create.topics.enable: false
+      unclean.leader.election.enable: false
+    rack:
+      topologyKey: topology.kubernetes.io/zone
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: proview-events-v1
+  labels:
+    strimzi.io/cluster: {{ $k.name }}
+    {{- include "proview.labels" . | nindent 4 }}
+spec:
+  topicName: {{ $k.topic.name }}
+  partitions: {{ $k.topic.partitions }}
+  replicas: {{ $k.replicationFactor }}
+  config:
+    retention.ms: {{ $k.topic.retentionMs | int64 | quote }}
+    min.insync.replicas: {{ $k.minInsyncReplicas }}
+    compression.type: producer
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: proview-events-dlq
+  labels:
+    strimzi.io/cluster: {{ $k.name }}
+    {{- include "proview.labels" . | nindent 4 }}
+spec:
+  topicName: {{ $k.dlq.name }}
+  partitions: {{ $k.dlq.partitions }}
+  replicas: {{ $k.replicationFactor }}
+  config:
+    retention.ms: {{ $k.dlq.retentionMs | int64 | quote }}
+    min.insync.replicas: {{ $k.minInsyncReplicas }}
+{{- end }}

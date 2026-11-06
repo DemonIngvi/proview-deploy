@@ -1,0 +1,131 @@
+# ProView umbrella chart.
+#
+# Prerequisites (cluster-wide, installed once by the platform team):
+#   - Strimzi operator            (Kafka, KRaft)          https://strimzi.io
+#   - CloudNativePG operator      (PostgreSQL)            https://cloudnative-pg.io
+#   - Altinity ClickHouse operator (ClickHouse + Keeper)  https://github.com/Altinity/clickhouse-operator
+#   - optional: Prometheus Operator (ServiceMonitor), KEDA, ingress-nginx, cert-manager
+# See proview-docs/docs/runbooks/install.md.
+
+# ---------------------------------------------------------------- secrets
+# One Secret holds all application secrets. In production create it outside
+# Helm (External Secrets / Sealed Secrets / Vault) and set existingSecret.
+secrets:
+  existingSecret: ""
+  name: proview-secrets
+  # dev only; rendered when existingSecret is empty. TOKEN_KEYS is derived
+  # from tokenKeyID/TOKEN_SECRET; add a previous key there during rotation.
+  tokenKeyID: k1
+  values:
+    TOKEN_SECRET: change-me-dev-token-secret-0123456789abcdef
+    BANNER_ADMIN_TOKEN: change-me-banner-admin-token
+    ADMIN_PASSWORD: change-me
+    CLICKHOUSE_PASSWORD: change-me-clickhouse
+    CLICKHOUSE_RO_PASSWORD: change-me-clickhouse-ro
+
+# ---------------------------------------------------------------- infrastructure
+kafka:
+  enabled: true
+  name: proview-kafka
+  version: 4.1.0
+  replicas: 3                 # combined controller+broker nodes (KRaft)
+  replicationFactor: 3        # with minInsyncReplicas 2: survives one node loss without losing acked writes
+  minInsyncReplicas: 2
+  storage: 100Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: "1", memory: 4Gi }
+    limits: { memory: 4Gi }
+  topic:
+    name: proview.events.v1
+    partitions: 24            # caps ingester parallelism; ~2-5 MB/s per partition is comfortable
+    retentionMs: 604800000    # 7 days of replay buffer for ClickHouse outages
+  dlq:
+    name: proview.events.dlq
+    partitions: 3
+    retentionMs: 1209600000
+
+postgres:
+  enabled: true
+  name: proview-pg
+  instances: 3                # primary + 2 replicas, automatic failover
+  storage: 10Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+
+clickhouse:
+  enabled: true
+  name: proview               # service: clickhouse-proview
+  shards: 1
+  replicas: 3                 # Replicated database engine, any replica serves reads
+  storage: 200Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: "2", memory: 8Gi }
+    limits: { memory: 8Gi }
+  keeper:
+    replicas: 3
+    storage: 10Gi
+
+# ---------------------------------------------------------------- services
+# fullnameOverride keeps stable Service names ("proview-banner-service", ...)
+# regardless of the release name.
+proview-banner-service:
+  enabled: true
+  fullnameOverride: proview-banner-service
+  secret:
+    existingSecret: proview-secrets
+    keys: [TOKEN_SECRET, ADMIN_TOKEN=BANNER_ADMIN_TOKEN]
+  extraSecretEnv:
+    - name: POSTGRES_DSN
+      secretName: proview-pg-app   # created by CloudNativePG
+      key: uri
+  migrations:
+    enabled: true
+    hooks: post-install,pre-upgrade
+  ingress:
+    enabled: false
+
+proview-event-collector:
+  enabled: true
+  fullnameOverride: proview-event-collector
+  env:
+    KAFKA_BROKERS: proview-kafka-kafka-bootstrap:9092
+  secret:
+    existingSecret: proview-secrets
+    keys: [TOKEN_KEYS]
+  autoscaling:
+    minReplicas: 4
+    maxReplicas: 40
+
+proview-event-ingester:
+  enabled: true
+  fullnameOverride: proview-event-ingester
+  env:
+    KAFKA_BROKERS: proview-kafka-kafka-bootstrap:9092
+    CLICKHOUSE_ADDRS: clickhouse-proview:9000
+    CLICKHOUSE_USER: proview
+    CLICKHOUSE_DB_ENGINE: "Replicated('/clickhouse/databases/{db}', '{shard}', '{replica}')"
+  secret:
+    existingSecret: proview-secrets
+    keys: [CLICKHOUSE_PASSWORD]
+  migrations:
+    enabled: true
+    hooks: post-install,pre-upgrade
+
+proview-analytics:
+  enabled: true
+  fullnameOverride: proview-analytics
+  env:
+    CLICKHOUSE_ADDRS: clickhouse-proview:9000
+    CLICKHOUSE_USER: proview_ro
+    BANNER_ADMIN_URL: http://proview-banner-service:8081
+  secret:
+    existingSecret: proview-secrets
+    keys: [CLICKHOUSE_PASSWORD=CLICKHOUSE_RO_PASSWORD, ADMIN_PASSWORD, BANNER_ADMIN_TOKEN]
+
+proview-web:
+  enabled: true
+  fullnameOverride: proview-web

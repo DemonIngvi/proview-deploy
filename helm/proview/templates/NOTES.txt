@@ -1,0 +1,18 @@
+ProView {{ .Chart.AppVersion }} installed into namespace {{ .Release.Namespace }}.
+
+Infrastructure (operators reconcile it asynchronously; services retry until it is ready):
+  kubectl -n {{ .Release.Namespace }} get kafka,kafkatopic,cluster.postgresql.cnpg.io,chi,chk
+
+Rollout:
+  kubectl -n {{ .Release.Namespace }} get deploy,hpa,pdb -l app.kubernetes.io/part-of=proview
+
+Smoke test (port-forward the site):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/proview-web 8080:8080
+  curl -A "Mozilla/5.0 Chrome/130" "http://localhost:8080/v1/banner?placement=home_top"
+
+Admin dashboard:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/proview-analytics 8090:8080   # http://localhost:8090
+{{- if not .Values.secrets.existingSecret }}
+
+WARNING: development secrets from values are in use. Set secrets.existingSecret for production.
+{{- end }}

@@ -1,0 +1,103 @@
+{{- if .Values.clickhouse.enabled }}
+{{- $c := .Values.clickhouse }}
+{{- $secret := include "proview.secretName" . }}
+# ClickHouse Keeper (Raft) for replication metadata.
+apiVersion: clickhouse-keeper.altinity.com/v1
+kind: ClickHouseKeeperInstallation
+metadata:
+  name: {{ $c.name }}-keeper
+  labels: {{- include "proview.labels" . | nindent 4 }}
+spec:
+  configuration:
+    clusters:
+      - name: keeper
+        layout:
+          replicasCount: {{ $c.keeper.replicas }}
+  defaults:
+    templates:
+      podTemplate: keeper
+      dataVolumeClaimTemplate: keeper-data
+  templates:
+    podTemplates:
+      - name: keeper
+        spec:
+          containers:
+            - name: clickhouse-keeper
+              image: clickhouse/clickhouse-keeper:25.8
+              resources:
+                requests: { cpu: 250m, memory: 512Mi }
+                limits: { memory: 1Gi }
+    volumeClaimTemplates:
+      - name: keeper-data
+        spec:
+          accessModes: [ReadWriteOnce]
+          {{- with $c.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ $c.keeper.storage }}
+---
+# ClickHouse: 1 shard x N replicas. Databases use the Replicated engine
+# (set by event-ingester migrations), so every MergeTree table is replicated
+# and any replica can serve analytics reads.
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: {{ $c.name }}
+  labels: {{- include "proview.labels" . | nindent 4 }}
+spec:
+  configuration:
+    zookeeper:
+      nodes:
+        - host: keeper-{{ $c.name }}-keeper
+          port: 2181
+    users:
+      # Writer: event-ingester (schema owner).
+      proview/k8s_secret_password: {{ $secret }}/CLICKHOUSE_PASSWORD
+      proview/networks/ip: ["::/0"]
+      proview/profile: default
+      proview/grants/query:
+        - "GRANT ALL ON proview.*"
+        - "GRANT ALL ON proview_agg.*"
+        - "GRANT CREATE DATABASE ON *.*"
+      # Reader: proview-analytics, SELECT on aggregates only.
+      proview_ro/k8s_secret_password: {{ $secret }}/CLICKHOUSE_RO_PASSWORD
+      proview_ro/networks/ip: ["::/0"]
+      proview_ro/profile: analytics_ro
+      proview_ro/grants/query:
+        - "GRANT SELECT ON proview_agg.*"
+    profiles:
+      analytics_ro/readonly: 2
+      analytics_ro/max_execution_time: 15
+      analytics_ro/max_memory_usage: 4000000000
+    clusters:
+      - name: main
+        layout:
+          shardsCount: {{ $c.shards }}
+          replicasCount: {{ $c.replicas }}
+  defaults:
+    templates:
+      podTemplate: clickhouse
+      dataVolumeClaimTemplate: data
+  templates:
+    podTemplates:
+      - name: clickhouse
+        podDistribution:
+          - type: ReplicaAntiAffinity
+        spec:
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:25.8
+              resources: {{- toYaml $c.resources | nindent 16 }}
+    volumeClaimTemplates:
+      - name: data
+        spec:
+          accessModes: [ReadWriteOnce]
+          {{- with $c.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ $c.storage }}
+{{- end }}

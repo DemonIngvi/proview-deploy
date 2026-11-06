@@ -1,0 +1,93 @@
+# Production profile: secrets from an external store, TLS ingress per API,
+# monitoring and network policies on. Sized for ~20k RPS (see proview-docs,
+# architecture.md "Capacity plan"); HPA adds headroom for spikes.
+secrets:
+  existingSecret: proview-secrets   # managed by External Secrets Operator / Vault
+
+# Sizing for ~50k events/s at peak (20k RPS), see architecture.md §7.
+kafka:
+  storageClass: fast-ssd
+  storage: 1Ti
+  topic:
+    retentionMs: 259200000   # 3 days of replay at sustained peak
+clickhouse:
+  storageClass: fast-ssd
+  storage: 2Ti
+  resources:
+    requests: { cpu: "8", memory: 32Gi }
+    limits: { memory: 32Gi }
+postgres:
+  storageClass: fast-ssd
+
+proview-banner-service:
+  autoscaling: { minReplicas: 4, maxReplicas: 30 }
+  serviceMonitor: { enabled: true }
+  networkPolicy: { enabled: true }
+  env:
+    CORS_ALLOWED_ORIGINS: "https://www.example.com,https://news.example.com"
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+      nginx.ingress.kubernetes.io/limit-rps: "200"   # per client IP
+    hosts:
+      - host: ads.example.com
+        paths: [{ path: /v1/banner, pathType: Prefix }]
+    tls: [{ secretName: ads-example-com-tls, hosts: [ads.example.com] }]
+
+proview-event-collector:
+  autoscaling: { minReplicas: 6, maxReplicas: 40 }
+  serviceMonitor: { enabled: true }
+  networkPolicy: { enabled: true }
+  env:
+    CORS_ALLOWED_ORIGINS: "https://www.example.com,https://news.example.com"
+    COUNTRY_HEADER: CF-IPCountry
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+      nginx.ingress.kubernetes.io/limit-rps: "100"
+      nginx.ingress.kubernetes.io/proxy-body-size: 64k
+    hosts:
+      - host: events.example.com
+        paths: [{ path: /v1/events, pathType: Prefix }]
+    tls: [{ secretName: events-example-com-tls, hosts: [events.example.com] }]
+
+proview-event-ingester:
+  serviceMonitor: { enabled: true }
+  networkPolicy: { enabled: true }
+  autoscaling: { enabled: false }
+  keda: { enabled: true, lagThreshold: "50000", bootstrapServers: proview-kafka-kafka-bootstrap:9092 }
+
+proview-analytics:
+  serviceMonitor: { enabled: true }
+  networkPolicy: { enabled: true }
+  env:
+    AUTH_DISABLED: "true"   # SSO via oauth2-proxy at the ingress
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+      nginx.ingress.kubernetes.io/auth-url: https://sso.example.com/oauth2/auth
+      nginx.ingress.kubernetes.io/auth-signin: https://sso.example.com/oauth2/start?rd=$scheme://$host$request_uri
+    hosts:
+      - host: analytics.example.com
+        paths: [{ path: /, pathType: Prefix }]
+    tls: [{ secretName: analytics-example-com-tls, hosts: [analytics.example.com] }]
+
+proview-web:
+  env:
+    BANNER_ENDPOINT: https://ads.example.com
+    COLLECTOR_ENDPOINT: https://events.example.com
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    hosts:
+      - host: demo.example.com
+        paths: [{ path: /, pathType: Prefix }]
+    tls: [{ secretName: demo-example-com-tls, hosts: [demo.example.com] }]

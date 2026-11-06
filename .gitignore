@@ -1,0 +1,4 @@
+.env
+*.tgz
+helm/proview/charts/
+helm/proview/Chart.lock

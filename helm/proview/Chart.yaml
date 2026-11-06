@@ -1,0 +1,34 @@
+apiVersion: v2
+name: proview
+description: "ProView platform: banner serving, event collection, Kafka to ClickHouse ingestion and analytics, with operator-managed Kafka, PostgreSQL and ClickHouse"
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+home: https://github.com/DemonIngvi/proview-deploy
+keywords: [proview, advertising, kafka, clickhouse]
+
+# Service charts are published by each service repository on tag
+# (helm push ... oci://ghcr.io/demoningvi/charts). For local development:
+#   scripts/helm-local-deps.sh   (packages ../../proview-*/charts/* into charts/)
+dependencies:
+  - name: proview-banner-service
+    version: 0.1.0
+    repository: oci://ghcr.io/demoningvi/charts
+    condition: proview-banner-service.enabled
+  - name: proview-event-collector
+    version: 0.1.0
+    repository: oci://ghcr.io/demoningvi/charts
+    condition: proview-event-collector.enabled
+  - name: proview-event-ingester
+    version: 0.1.0
+    repository: oci://ghcr.io/demoningvi/charts
+    condition: proview-event-ingester.enabled
+  - name: proview-analytics
+    version: 0.1.0
+    repository: oci://ghcr.io/demoningvi/charts
+    condition: proview-analytics.enabled
+  - name: proview-web
+    version: 0.1.0
+    repository: oci://ghcr.io/demoningvi/charts
+    condition: proview-web.enabled
