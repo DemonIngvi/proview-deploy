@@ -35,6 +35,8 @@ jobs:
           done
       - uses: actions/setup-go@v6
         with: { go-version: "1.26" }
+      - name: Development secrets for the compose stack
+        run: cp proview-deploy/compose/.env.example proview-deploy/compose/.env
       - name: Build, start stack and run e2e tests
         working-directory: proview-deploy
         run: scripts/e2e.sh
